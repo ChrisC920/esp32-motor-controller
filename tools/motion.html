@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 • Motion monitor</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101416;color:#e8eeed}body{max-width:1080px;margin:40px auto;padding:0 24px}h1{font-size:28px;margin:8px 0}h2{font-size:17px;font-weight:550}p{color:#aebbbb;line-height:1.6}.eyebrow{letter-spacing:.14em;font-size:12px;color:#8ea2a1}button{font:inherit;padding:11px 17px;border:1px solid #536564;border-radius:6px;background:#263d3a;color:#efffff;cursor:pointer}button:disabled{opacity:.45;cursor:default}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:25px 0}#status{color:#b8c8c6;font-size:14px}.values{display:flex;gap:50px;margin:30px 0;flex-wrap:wrap}.value{font:32px ui-monospace,monospace;margin-top:6px}.label{font-size:13px;color:#aab9b7}.chart{width:100%;height:300px;display:block}section{border-top:1px solid #334341;padding:20px 0}.bottom{display:grid;grid-template-columns:1fr 1fr;gap:40px}#tilt{width:100%;height:220px}pre{font-size:12px;white-space:pre-wrap;color:#b7c7c3;max-height:130px;overflow:auto}.legend{display:flex;gap:22px;font-size:13px}.x{color:#7ed4be}.y{color:#e3b975}.z{color:#9dafff}small{color:#99adaa}#hint{color:#e3b975}@media(max-width:650px){.bottom{grid-template-columns:1fr}.values{gap:24px}}
+</style>
+<div class="eyebrow">NODEMCU ESP-32S / LIS2DH</div>
+<h1>Live motion monitor</h1>
+<p>Move or tilt the sensor to see acceleration along each axis. USB serial at 115200 baud.</p>
+<div class="toolbar"><button id="connect">Connect ESP32</button><button id="disconnect" disabled>Disconnect</button><span id="status" role="status">Not connected</span></div>
+<p id="hint">Close the PlatformIO serial monitor first. Select the USB serial device when connecting.</p>
+<div class="values"><div><div class="label x">X acceleration</div><div class="value" id="x">—</div></div><div><div class="label y">Y acceleration</div><div class="value" id="y">—</div></div><div><div class="label z">Z acceleration</div><div class="value" id="z">—</div></div><div><div class="label">Vector magnitude</div><div class="value" id="mag">—</div></div></div>
+<section><h2>Acceleration over the last 20 seconds</h2><div class="legend"><span class="x">X</span><span class="y">Y</span><span class="z">Z</span></div><canvas id="chart" class="chart" aria-label="Live X, Y and Z acceleration in g versus seconds ago"></canvas><small>Source: connected ESP32 USB serial • readings include gravity • sensor range ±2g</small></section>
+<div class="bottom"><section><h2>Gravity direction in the sensor's XY plane</h2><canvas id="tilt" aria-label="Measured X and Y acceleration vector"></canvas><p id="angles">Waiting for a sensor sample.</p><small>The dot shows X and Y acceleration, not position. Tilt estimates assume the sensor is nearly stationary. An accelerometer alone cannot measure yaw.</small></section><section><h2>Serial activity</h2><pre id="log">No serial data received yet.</pre><small>This viewer only reads. It sends no motor commands.</small></section></div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const pattern=/ax=([+-]?\d+(?:\.\d+)?)\s*g\s+ay=([+-]?\d+(?:\.\d+)?)\s*g\s+az=([+-]?\d+(?:\.\d+)?)\s*g/;
+let port=null,reader=null,running=false,samples=[],latest=null,lastReceived=0,connectedAt=0,logs=[],session=0;
+function log(line){logs.push(line);logs=logs.slice(-8);$('log').textContent=logs.join('\n');}
+function accept(line){
+  if(!line.trim())return;
+  log(line);
+  const m=line.match(pattern);if(!m)return;
+  const v=m.slice(1).map(Number);if(!v.every(Number.isFinite))return;
+  latest={t:performance.now(),v};lastReceived=latest.t;samples.push(latest);
+  samples=samples.filter(s=>s.t>latest.t-20000).slice(-2000);
+  ['x','y','z'].forEach((id,i)=>$(id).textContent=v[i].toFixed(3)+' g');
+  $('mag').textContent=Math.hypot(...v).toFixed(3)+' g';
+  const [x,y,z]=v;
+  if(Math.hypot(...v)<0.1)$('angles').textContent='Tilt unavailable near zero gravity.';
+  else $('angles').textContent=`Estimated roll ${(Math.atan2(y,z)*180/Math.PI).toFixed(1)}° · pitch ${(Math.atan2(-x,Math.hypot(y,z))*180/Math.PI).toFixed(1)}°`;
+}
+async function connect(){
+  if(!('serial' in navigator)){ $('status').textContent='Open in desktop Chrome or Edge to access USB serial.';return; }
+  $('connect').disabled=true;let mySession=++session;
+  try{
+    port=await navigator.serial.requestPort();
+    await port.open({baudRate:115200});
+    running=true;samples=[];latest=null;lastReceived=0;connectedAt=performance.now();logs=[];
+    ['x','y','z','mag'].forEach(id=>$(id).textContent='—');
+    $('angles').textContent='Waiting for a sensor sample.';
+    $('disconnect').disabled=false;$('hint').textContent='Connected. Move the accelerometer gently. If no readings arrive, check firmware and sensor wiring.';
+    const decoder=new TextDecoder();let buffer='';
+    reader=port.readable.getReader();
+    while(running && mySession===session){
+      const {value,done}=await reader.read();if(done)break;
+      buffer+=decoder.decode(value,{stream:true});
+      let end;
+      while((end=buffer.indexOf('\n'))>=0){accept(buffer.slice(0,end).replace(/\r$/,''));buffer=buffer.slice(end+1);}
+      if(buffer.length>4096){buffer='';log('Discarded an oversized serial line.');}
+    }
+  }catch(e){log(e.message);$('hint').textContent=e.name==='NotFoundError'?'Connection cancelled.':`Connection error: ${e.message}. Close other serial monitors and reconnect.`;}
+  finally{
+    running=false;
+    if(reader){reader.releaseLock();reader=null;}
+    if(port){try{await port.close();}catch(e){log(e.message);}port=null;}
+    $('connect').disabled=false;$('disconnect').disabled=true;$('status').textContent='Disconnected';
+  }
+}
+$('connect').onclick=connect;
+$('disconnect').onclick=async()=>{running=false;$('disconnect').disabled=true;if(reader)await reader.cancel();};
+function surface(id){const c=$(id),r=c.getBoundingClientRect(),d=devicePixelRatio||1;
+  if(c.width!==Math.round(r.width*d)||c.height!==Math.round(r.height*d)){c.width=Math.round(r.width*d);c.height=Math.round(r.height*d);}
+  const ctx=c.getContext('2d');ctx.setTransform(d,0,0,d,0,0);ctx.clearRect(0,0,r.width,r.height);return [ctx,r.width,r.height];}
+function draw(){
+  const now=performance.now();
+  if(running){const age=now-(lastReceived||connectedAt);$('status').textContent=lastReceived?(age<2000?'Live · '+samples.length+' samples in view':'Stale · '+(age/1000).toFixed(0)+' s since last sample'):'Connected · waiting for acceleration';}
+  samples=samples.filter(s=>s.t>now-20000);
+  const [c,w,h]=surface('chart'),l=52,r=w-16,top=25,b=h-43;
+  c.font='12px system-ui';c.lineWidth=1;
+  for(let g=-2;g<=2;g++){const y=top+(2-g)/4*(b-top);c.strokeStyle='#2b3938';c.beginPath();c.moveTo(l,y);c.lineTo(r,y);c.stroke();c.fillStyle='#9aadaa';c.fillText(g+' g',12,y+4);}
+  c.fillStyle='#9aadaa';c.fillText('Acceleration (g)',l,14);
+  for(let sec=20;sec>=0;sec-=5){let x=l+(20-sec)/20*(r-l);c.fillText(String(sec),x-5,b+20);}
+  c.fillText('Seconds ago',Math.max(l,(w-80)/2),h-3);
+  c.save();c.beginPath();c.rect(l,top,r-l,b-top);c.clip();
+  ['#7ed4be','#e3b975','#9dafff'].forEach((color,axis)=>{c.strokeStyle=color;c.lineWidth=2;c.beginPath();let previous=null;
+    samples.forEach(s=>{const x=r-(now-s.t)/20000*(r-l),y=top+(2-s.v[axis])/4*(b-top);if(!previous||s.t-previous.t>1500)c.moveTo(x,y);else c.lineTo(x,y);previous=s;});c.stroke();});c.restore();
+  const [t,tw,th]=surface('tilt'),cx=tw/2,cy=th/2,R=Math.min(tw,th)*.37;
+  t.strokeStyle='#425754';t.lineWidth=1;t.beginPath();t.arc(cx,cy,R,0,Math.PI*2);t.moveTo(cx-R,cy);t.lineTo(cx+R,cy);t.moveTo(cx,cy-R);t.lineTo(cx,cy+R);t.stroke();
+  t.fillStyle='#9aadaa';t.font='12px system-ui';t.fillText('+X',cx+R+8,cy+4);t.fillText('+Y',cx-8,cy-R-10);t.fillText('Ring = 1 g',8,th-5);
+  if(latest){const [x,y]=latest.v,dx=x*R,dy=-y*R;t.save();t.beginPath();t.rect(0,0,tw,th);t.clip();t.strokeStyle='#7ed4be';t.beginPath();t.moveTo(cx,cy);t.lineTo(cx+dx,cy+dy);t.stroke();t.fillStyle=running&&now-lastReceived<2000?'#7ed4be':'#657571';t.beginPath();t.arc(cx+dx,cy+dy,7,0,Math.PI*2);t.fill();t.restore();}
+  requestAnimationFrame(draw);
+}
+if(!('serial' in navigator)){$('status').textContent='USB serial requires desktop Chrome or Edge.';$('connect').disabled=true;}
+draw();
+</script>
+</html>
