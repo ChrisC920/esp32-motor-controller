@@ -25,11 +25,11 @@ This assumes a complete L298N module with flyback diodes, not a bare L298N chip.
 1. Build with PlatformIO's Build button or `pio run`.
 2. Connect the ESP32 by USB, then use Upload or `pio run -t upload`.
 3. Open the serial monitor at 115200 baud with newline line endings. With the CLI, use `pio device monitor`. Press reset to see startup messages if needed.
-4. Send `m 150` to run forward at PWM duty 150 out of 255. Send `s` to stop. Send `m -150` to run in reverse. Send `m 0` to stop as well.
+4. Send `m 60` to run forward at 60%. Send `s` to stop. Send `m -60` to run in reverse at 60%. Send `m 0` to stop as well.
 
-Motor commands accept integers from -255 to 255. Direction names depend on motor wiring. Small PWM values may not start the motor. The motor starts stopped, and stops after 10 seconds without another valid motor command. Repeat the command to continue running. Change `COMMAND_TIMEOUT_MS` in `src/main.cpp` if needed. On a direction change, the firmware stops first; wait at least 0.5 seconds and resend the command to reverse.
+Motor commands accept integer percentages from -100 to 100. Positive values run forward, negative values run in reverse, and zero stops. Direction names depend on motor wiring. Small percentages may not start the motor. The motor starts stopped and keeps its last setting until it receives `s` or `m 0`, the ESP32 resets, or power is removed. On a direction change, the firmware stops first; wait at least 0.5 seconds and resend the command to reverse.
 
-Acceleration prints five times per second as `ax`, `ay`, and `az` in g, alongside the current motor PWM. The sensor runs at 100 Hz in high-resolution ±2g mode. Readings include gravity, so a stationary, level sensor should show about ±1g on the vertical axis and near zero on the other two. These are acceleration readings, not speed or position.
+Acceleration prints five times per second as `ax`, `ay`, and `az` in g, alongside the current signed motor percentage. The sensor runs at 100 Hz in high-resolution ±2g mode. Readings include gravity, so a stationary, level sensor should show about ±1g on the vertical axis and near zero on the other two. These are acceleration readings, not speed or position.
 
 The firmware probes I²C addresses 0x18 and 0x19 and checks the device identity. If the sensor is absent or a read fails, it prints an error. Motor commands remain available independently. After correcting wiring with power off and reconnecting, reset or send `retry` to stop the motor and initialize the sensor again. Send `help` to show commands.
 
@@ -37,7 +37,7 @@ The V2.0 breakout manufacturer is unconfirmed. The register interface follows th
 
 ## Motor-only program
 
-`src/motor_only.cpp` runs the same motor controls without initializing I²C or reading the IMU. It uses ENA GPIO25, IN1 GPIO26 and IN2 GPIO27 for the same single motor on channel A. Serial commands, the 10-second command timeout and reversal pause are unchanged.
+`src/motor_only.cpp` runs the same motor controls without initializing I²C or reading the IMU. It uses ENA GPIO25, IN1 GPIO26 and IN2 GPIO27 for the same single motor on channel A. Serial commands and the reversal pause are unchanged.
 
 Select **motor-only** in PlatformIO's Project Tasks to build or upload it, or run:
 
@@ -47,7 +47,7 @@ pio run -e motor-only -t upload
 pio device monitor -e motor-only
 ```
 
-At 115200 baud, send `m 150`, `m -150`, or `s` followed by Enter. The motor starts stopped. No accelerometer is required. The motion dashboard has no acceleration data in this mode.
+At 115200 baud, send `m 60`, `m -60`, or `s` followed by Enter. The motor starts stopped. No accelerometer is required. The motion dashboard has no acceleration data in this mode.
 
 The original program remains in `src/main.cpp`. Use `pio run -e nodemcu-32s -t upload` to restore motor plus IMU operation. Each environment compiles only its own source file, avoiding duplicate `setup()` and `loop()` definitions. The default environment remains `nodemcu-32s`.
 
@@ -61,7 +61,7 @@ The motor-only program also accepts commands over UART2 at **115200 baud, 8 data
 
 Use 3.3V signal levels, not 5V TTL or RS-232 voltages. With the ESP32 powered through USB, leave the adapter's power pin disconnected. Motor pins remain ENA GPIO25, IN1 GPIO26 and IN2 GPIO27. UART goes to the ESP32, not directly to the L298N.
 
-Upload the `motor-only` environment again after this change. Send `help\n`, `m 150\n`, `m -150\n`, or `s\n`; `\n` means an actual newline byte. Replies return on the same serial connection that received the command. USB serial remains available with its own command buffer. Both inputs control the same motor; the latest valid motor command wins and refreshes the shared 10-second timeout. Only one controller should send motor commands at a time. Send `s`, wait at least 0.5 seconds, then send the opposite direction to reverse.
+Upload the `motor-only` environment again after this change. Send `help\n`, `m 60\n`, `m -60\n`, or `s\n`; `\n` means an actual newline byte. Replies return on the same serial connection that received the command. USB serial remains available with its own command buffer. Both inputs control the same motor, and the latest valid command wins. Only one controller should send motor commands at a time. Send `s`, wait at least 0.5 seconds, then send the opposite direction to reverse.
 
 The external UART uses a separate adapter port on your computer. Open that adapter at 115200 baud for UART2, or the ESP32's onboard USB serial port for the original USB commands. Each port can be opened by only one monitor at a time.
 

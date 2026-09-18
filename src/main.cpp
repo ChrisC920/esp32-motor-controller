@@ -7,12 +7,15 @@
 // GPIO numbers for a classic ESP32 development board.
 constexpr uint8_t MOTOR_ENA = 25, MOTOR_IN1 = 26, MOTOR_IN2 = 27;
 constexpr uint8_t I2C_SDA = 22, I2C_SCL = 23, PWM_CHANNEL = 0;
-constexpr uint32_t COMMAND_TIMEOUT_MS = 10000;
 constexpr uint32_t REVERSE_PAUSE_MS = 500;
 int motorSpeed = 0, lastDirection = 0;
-uint32_t stoppedAt = 0, lastMotorCommand = 0;
+uint32_t stoppedAt = 0;
 uint8_t sensorAddress = 0;
 bool sensorReady = false;
+
+uint8_t percentToPwm(int percent) {
+  return static_cast<uint8_t>((abs(percent) * 255 + 50) / 100);
+}
 
 void stopMotor() {
   ledcWrite(PWM_CHANNEL, 0);
@@ -38,7 +41,7 @@ void setMotor(int speed) {
   }
   digitalWrite(MOTOR_IN1, direction > 0 ? HIGH : LOW);
   digitalWrite(MOTOR_IN2, direction < 0 ? HIGH : LOW);
-  ledcWrite(PWM_CHANNEL, abs(speed));
+  ledcWrite(PWM_CHANNEL, percentToPwm(speed));
   motorSpeed = speed;
   lastDirection = direction;
 }
@@ -79,12 +82,12 @@ bool beginAccelerometer() {
 
 void printHelp() {
   Serial.println("Commands, followed by Enter:");
-  Serial.println("  m 150   forward, PWM 0..255");
-  Serial.println("  m -150  reverse, PWM -255..0");
+  Serial.println("  m 60    forward at 60%");
+  Serial.println("  m -60   reverse at 60%");
   Serial.println("  s       stop/coast");
   Serial.println("  retry   stop motor and reconnect accelerometer");
   Serial.println("  help    show commands");
-  Serial.println("Motor stops after 10 s without a valid motor command.");
+  Serial.println("Motor keeps running until s, m 0, reset, or power-off.");
 }
 
 void handleCommand(char *line) {
@@ -106,13 +109,12 @@ void handleCommand(char *line) {
     while (isspace(static_cast<unsigned char>(*number))) ++number;
     char *end = nullptr;
     const long speed = strtol(number, &end, 10);
-    if (end == number || *end != '\0' || speed < -255 || speed > 255) {
-      Serial.println("Use m followed by an integer from -255 to 255.");
+    if (end == number || *end != '\0' || speed < -100 || speed > 100) {
+      Serial.println("Use m followed by an integer from -100 to 100 percent.");
       return;
     }
-    lastMotorCommand = millis();
     setMotor(static_cast<int>(speed));
-    Serial.printf("Motor PWM: %d\n", motorSpeed);
+    Serial.printf("Motor: %d%%\n", motorSpeed);
   } else {
     Serial.println("Unknown command. Send help.");
   }
@@ -122,7 +124,7 @@ void pollSerial() {
   static char line[48];
   static size_t length = 0;
   static bool overflow = false;
-  // Bound each pass so continuous input cannot starve the timeout.
+  // Bound each pass so continuous input cannot starve other work.
   for (int budget = 64; budget > 0 && Serial.available(); --budget) {
     const char c = Serial.read();
     if (c == '\n' || c == '\r') {
@@ -159,10 +161,6 @@ void setup() {
 
 void loop() {
   pollSerial();
-  if (motorSpeed != 0 && millis() - lastMotorCommand >= COMMAND_TIMEOUT_MS) {
-    stopMotor();
-    Serial.println("Motor stopped: command timeout.");
-  }
   static uint32_t lastSample = 0;
   if (sensorReady && millis() - lastSample >= 200) {
     lastSample = millis();
@@ -179,7 +177,7 @@ void loop() {
           // Left-aligned 12-bit value, 1 mg per count at +/-2g.
           g[axis] = (sample / 16) * 0.001f;
         }
-        Serial.printf("ax=%.3f g  ay=%.3f g  az=%.3f g  motor=%d\n",
+        Serial.printf("ax=%.3f g  ay=%.3f g  az=%.3f g  motor=%d%%\n",
                       g[0], g[1], g[2], motorSpeed);
       }
     }

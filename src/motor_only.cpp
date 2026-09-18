@@ -16,10 +16,13 @@ struct CommandBuffer {
   bool overflow = false;
 };
 CommandBuffer usbBuffer, uartBuffer;
-constexpr uint32_t COMMAND_TIMEOUT_MS = 10000;
 constexpr uint32_t REVERSE_PAUSE_MS = 500;
 int motorSpeed = 0, lastDirection = 0;
-uint32_t stoppedAt = 0, lastMotorCommand = 0;
+uint32_t stoppedAt = 0;
+
+uint8_t percentToPwm(int percent) {
+  return static_cast<uint8_t>((abs(percent) * 255 + 50) / 100);
+}
 
 void stopMotor() {
   ledcWrite(PWM_CHANNEL, 0);
@@ -45,18 +48,18 @@ void setMotor(int speed, HardwareSerial &port) {
   }
   digitalWrite(MOTOR_IN1, direction > 0 ? HIGH : LOW);
   digitalWrite(MOTOR_IN2, direction < 0 ? HIGH : LOW);
-  ledcWrite(PWM_CHANNEL, abs(speed));
+  ledcWrite(PWM_CHANNEL, percentToPwm(speed));
   motorSpeed = speed;
   lastDirection = direction;
 }
 
 void printHelp(HardwareSerial &port) {
   port.println("Commands, followed by Enter:");
-  port.println("  m 150   forward, PWM 0..255");
-  port.println("  m -150  reverse, PWM -255..0");
+  port.println("  m 60    forward at 60%");
+  port.println("  m -60   reverse at 60%");
   port.println("  s       stop/coast");
   port.println("  help    show commands");
-  port.println("Motor stops after 10 s without a valid motor command.");
+  port.println("Motor keeps running until s, m 0, reset, or power-off.");
 }
 
 void handleCommand(char *line, HardwareSerial &port) {
@@ -76,13 +79,12 @@ void handleCommand(char *line, HardwareSerial &port) {
     while (isspace(static_cast<unsigned char>(*number))) ++number;
     char *end = nullptr;
     const long speed = strtol(number, &end, 10);
-    if (end == number || *end != '\0' || speed < -255 || speed > 255) {
-      port.println("Use m followed by an integer from -255 to 255.");
+    if (end == number || *end != '\0' || speed < -100 || speed > 100) {
+      port.println("Use m followed by an integer from -100 to 100 percent.");
       return;
     }
-    lastMotorCommand = millis();
     setMotor(static_cast<int>(speed), port);
-    port.printf("Motor PWM: %d\n", motorSpeed);
+    port.printf("Motor: %d%%\n", motorSpeed);
   } else {
     port.println("Unknown command. Send help.");
   }
@@ -92,7 +94,7 @@ void pollSerial(HardwareSerial &port, CommandBuffer &buffer) {
   auto &line = buffer.line;
   auto &length = buffer.length;
   auto &overflow = buffer.overflow;
-  // Bound each pass so continuous input cannot starve the timeout.
+  // Bound each pass so continuous input cannot starve other work.
   for (int budget = 64; budget > 0 && port.available(); --budget) {
     const char c = port.read();
     if (c == '\n' || c == '\r') {
@@ -131,10 +133,5 @@ void setup() {
 void loop() {
   pollSerial(Serial, usbBuffer);
   pollSerial(motorUart, uartBuffer);
-  if (motorSpeed != 0 && millis() - lastMotorCommand >= COMMAND_TIMEOUT_MS) {
-    stopMotor();
-    Serial.println("Motor stopped: command timeout.");
-    motorUart.println("Motor stopped: command timeout.");
-  }
   delay(1);
 }
