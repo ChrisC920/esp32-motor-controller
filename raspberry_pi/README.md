@@ -1,6 +1,35 @@
-# Raspberry Pi 4 B controller
+# Raspberry Pi 4 B programs
 
-This Python program runs on Raspberry Pi OS and sends UART commands to the ESP32. The ESP32 needs the updated `motor-only` firmware from this project. The Pi does not run the ESP32 C++ code.
+## Ultrasonic distance sensor on the Pi
+
+`ultrasonic_test.py` reads a four-pin HC-SR04-style sensor directly from the Pi. It needs no ESP32 firmware or serial link. The default BCM GPIO pins do not overlap the UART presets below.
+
+With power disconnected, wire:
+
+- Sensor VCC → Pi 5V, physical pin 2, for a standard 5V HC-SR04.
+- Sensor GND → Pi GND, physical pin 6.
+- Sensor TRIG → Pi GPIO23, physical pin 16.
+- Sensor ECHO → a 330 Ω resistor → Pi GPIO24, physical pin 18.
+- Pi GPIO24 → a 470 Ω resistor → Pi GND. The two resistors reduce the sensor's 5V ECHO signal to about 3V.
+
+The divider is required for a 5V ECHO output; Pi GPIO inputs accept 3.3V. A 3.3V-compatible HC-SR04P can connect ECHO directly. See the [GPIO Zero wiring guide](https://gpiozero.readthedocs.io/en/stable/api_input.html#distancesensor-hc-sr04) and [Pi 4 header pinout](https://datasheets.raspberrypi.com/rpi4/raspberry-pi-4-datasheet.pdf).
+
+Copy and run the test on the Pi:
+
+```sh
+scp raspberry_pi/ultrasonic_test.py YOUR_USER@PI_ADDRESS:~/ultrasonic_test.py
+ssh YOUR_USER@PI_ADDRESS
+sudo apt install python3-gpiozero
+python3 ~/ultrasonic_test.py
+```
+
+The script prints distance in centimeters every 0.5 seconds. Use Ctrl+C to stop or `--once` for one reading. Use `--trigger` and `--echo` with BCM GPIO numbers if you choose different pins. A reading at the 4 m limit is reported as no echo or out of range. Do not connect the sensor's 5V ECHO directly to Pi GPIO.
+
+## UART motor controller
+
+`motor_control.py` runs on Raspberry Pi OS and sends UART commands to the ESP32. The ESP32 needs the matching `motor-only` or `six-motor-pinout` firmware from this project. The Pi does not run the ESP32 C++ code.
+
+For the `six-motor-pinout` firmware, run `python3 ~/motor_control.py --esp32-runtime six-motor-pinout`. In that mode, connect Pi TX to ESP32 GPIO3 and Pi RX to ESP32 GPIO1, plus common GND. The diagram's `PI TX` label at GPIO33 is incorrect. Isolate the board's USB serial chip TX output from GPIO3 before connecting Pi TX; unplugging USB may not isolate it on every board. The six-motor pin map and boot-pin cautions are in the project [README](../README.md#six-motor-diagram-runtime). The UART presets below still select the Pi's own TX and RX pins.
 
 ## Choose and wire a UART
 
