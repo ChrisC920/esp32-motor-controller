@@ -19,13 +19,10 @@ sudo reboot
 
 The [official AI Camera setup](https://www.raspberrypi.com/documentation/accessories/ai-camera.html) supports Pi 4B and requires the IMX500 firmware. Initial firmware/model loading can take several minutes. Wait for startup rather than interrupting it immediately.
 
-Copy the program and this guide from the Mac, replacing `YOUR_PI_USER` and `YOUR_PI_HOST` with your SSH login and host:
+You are running directly on the Pi. Open a terminal in the project's `raspberry_pi` folder. From the project root:
 
 ```sh
-ssh YOUR_PI_USER@YOUR_PI_HOST 'mkdir -p ~/camera-test'
-scp raspberry_pi/camera_test.py raspberry_pi/CAMERA.md YOUR_PI_USER@YOUR_PI_HOST:~/camera-test/
-ssh YOUR_PI_USER@YOUR_PI_HOST
-cd ~/camera-test
+cd raspberry_pi
 ```
 
 ## 1. Check the camera image
@@ -38,7 +35,7 @@ python3 camera_test.py --seconds 10
 
 The camera list should identify `imx500`. The program defaults to camera index 0 and requests a 640 x 480 stream at 30 FPS. It saves `first_frame.jpg`, `last_frame.jpg`, `frames.csv` and `summary.json` in a new directory under `camera_results/`. Check the JPEG for a visible scene, correct colours and focus. The test checks streaming, not the full 12MP resolution or every sensor mode. The lens focus is manually adjustable; follow the camera's focus instructions if the image is blurry.
 
-Headless operation is the default, so this works through SSH. Copy images back with `scp -r YOUR_PI_USER@YOUR_PI_HOST:~/camera-test/camera_results ./pi-camera-results` from the Mac. On a Pi with a desktop display, add `--preview` for a live window. Press Q or Ctrl+C to stop. Use `--camera 1` if the camera list indicates a different index. `--output my-test` selects a new result directory; existing directories are rejected to preserve earlier results.
+On the Pi desktop, run `python3 camera_test.py --preview --seconds 10` for a live window. Press Q or Ctrl+C to stop. Open the saved JPEGs from the Pi file manager. Without `--preview`, the program also works in a text console. Use `--camera 1` if the camera list indicates a different index. `--output my-test` selects a new result directory; existing directories are rejected to preserve earlier results.
 
 ## 2. Check the camera's AI processor
 
@@ -48,13 +45,13 @@ Run the bundled MobileNet SSD detector before trying a custom model. The [offici
 rpicam-hello -t 0s --post-process-file /usr/share/rpi-camera-assets/imx500_mobilenet_ssd.json --viewfinder-width 640 --viewfinder-height 480 --framerate 30
 ```
 
-Over SSH without a display, save a 10-second annotated video:
+To save a 10-second annotated video without opening a window:
 
 ```sh
 rpicam-vid --nopreview -t 10s -o imx500_detection.h264 --post-process-file /usr/share/rpi-camera-assets/imx500_mobilenet_ssd.json --width 640 --height 480 --framerate 30
 ```
 
-Copy the video to the Mac and open it in a player supporting raw H.264, such as VLC. Point the camera at a person or familiar everyday objects. Correct boxes and labels demonstrate that the on-sensor detector and host post-processing work. This demo does not measure per-inference latency. The requested video FPS is not a measurement of fresh AI results per second.
+Open the video in a player supporting raw H.264, such as VLC. Point the camera at a person or familiar everyday objects. Correct boxes and labels demonstrate that the on-sensor detector and host post-processing work. This demo does not measure per-inference latency. The requested video FPS is not a measurement of fresh AI results per second.
 
 ## 3. Test YOLO26n on the Pi CPU
 
@@ -63,7 +60,6 @@ The [Ultralytics Pi guide](https://docs.ultralytics.com/guides/raspberry-pi/) su
 Create a virtual environment that can access the system Picamera2/libcamera packages:
 
 ```sh
-cd ~/camera-test
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -82,9 +78,65 @@ python camera_test.py --mode yolo --model yolo26n_ncnn_model --imgsz 320 --secon
 
 Export may install extra dependencies and takes time. Re-export at 640 before testing NCNN with `--imgsz 640`. Keep exported models in separate directories if you want to retain both sizes. Use `--threads 2` or `--threads 4` to compare CPU usage. Add `--preview` on a local desktop to see detections live.
 
-The CSV records capture wait time, prediction time and detection count per processed frame. The JSON includes mean, median and p95 prediction latency, processed FPS and available temperature/throttling readings. Prediction time includes preprocessing, inference and post-processing inside `model.predict`. Processed FPS includes capture, drawing, logging, JPEG writes and optional display. Startup, exposure settling and three warmup predictions are excluded. Camera capture can skip frames while the CPU is busy. These are live pipeline measurements, not isolated neural network inference benchmarks or accuracy measurements. Each invocation gets a separate output folder.
+The CSV records capture wait time, prediction time and detection count per processed frame. The JSON includes mean, median and p95 prediction latency, processed FPS and available temperature/throttling readings. Prediction time includes preprocessing, inference and post-processing inside `model.predict`. The input is square-letterboxed with `rect=False` in both formats so the PyTorch run does not get a smaller rectangular input than NCNN. Processed FPS includes capture, drawing, logging, JPEG writes and optional display. Startup, exposure settling and three warmup predictions are excluded. Camera capture can skip frames while the CPU is busy. These are live pipeline measurements, not isolated neural network inference benchmarks or accuracy measurements. Each invocation gets a separate output folder.
+
+## 4. Compare YOLO26n against YOLO11n in both formats
+
+`compare_yolo.py` runs four combinations: YOLO26n PyTorch `.pt`, YOLO26n NCNN, YOLO11n PyTorch `.pt`, and YOLO11n NCNN. I chose YOLO11n because [Ultralytics' comparison](https://docs.ultralytics.com/compare/yolo11-vs-yolov8/) reports higher COCO accuracy, fewer parameters and fewer FLOPs than YOLOv8n. Those published figures do not establish which model is fastest on your Pi 4B.
+
+With the virtual environment activated, run this directly on the Pi from the same `raspberry_pi` folder:
+
+```sh
+source .venv/bin/activate
+python compare_yolo.py --imgsz 320 --frames 60 --repeats 2
+```
+
+The program captures 60 reference images at a requested 10 FPS. Keep your test objects in view for about six seconds after exposure settling. It closes the camera, downloads both models and exports fresh NCNN models at the selected input size. Export may install extra dependencies. Each output folder contains its own model exports, so a previous export at a different size is never reused accidentally.
+
+All four combinations process the same saved JPEG images in separate processes, using square inputs, CPU inference and the same confidence, IoU and detection limit. Exports use `half=False`. Runtime backend optimizations still apply. PyTorch uses four inference threads; NCNN uses the Ultralytics backend's default thread count. The benchmark records that distinction rather than claiming thread settings control both backends. Each backend performs five unmeasured warmup predictions. The test order is shuffled within each repeat, with a 10-second pause before each test to reduce ordering and heat effects. Cooling and power still matter; a fixed pause does not guarantee the same CPU temperature.
+
+This comparison does not show a live preview during timed inference. Drawing and saving boxes happen after measurement. It prints a final comparison and saves:
+
+- `comparison.csv`, with one row per model/format/repeat.
+- Per-test `summary.json` and `frames.csv`, with latency and temperature/throttling readings.
+- Per-test `first_detections.jpg` and `last_detections.jpg`, for comparing detections on matching images.
+- `settings.json`, recording test order, package versions and settings, plus the reference images and model files.
+
+`prediction_fps` is 1000 divided by mean prediction milliseconds. Prediction latency includes preprocessing, inference and post-processing. `replay_fps` also includes JPEG decoding and loop overhead. Neither number is live camera FPS. Detection count is not accuracy: more boxes can include false positives. Compare the saved boxes visually; measuring precision/recall or mAP requires labelled images.
+
+To compare at 640 using exactly the same captured images, replace the placeholder path with the first run's output directory:
+
+```sh
+python compare_yolo.py --imgsz 640 --input camera_results/compare_TIMESTAMP/images --frames 60 --repeats 2
+```
+
+Use `--frames 10 --repeats 1 --cooldown 0` for a quick functional check. Use more frames/repeats for steadier timing estimates. Ctrl+C stops the comparison and preserves completed results. If an export or test fails, the program reports failure and retains completed output rather than declaring a winner.
+
+For a live preview of any one combination after the comparison, use `camera_test.py`:
+
+```sh
+python camera_test.py --mode yolo --model yolo11n.pt --imgsz 320 --preview --seconds 30
+```
+
+For NCNN, pass that model's directory under the comparison output's `models/` folder to `--model` and use the matching `--imgsz`. These four comparison cases all run on the Pi CPU. The MobileNet test above separately exercises the IMX500 AI processor.
 
 ## Troubleshooting
+
+### Illegal instruction
+
+An `Illegal instruction` crash is a native-code failure. It can happen in PyTorch, NumPy/OpenBLAS, OpenCV or another compiled dependency before any camera access or YOLO inference. [PyTorch has reported this failure on Pi 4](https://github.com/pytorch/pytorch/issues/132032), but that historical report does not establish which installed version is failing on your Pi. Switching model weights or switching to NCNN through Ultralytics still imports shared dependencies and may crash too.
+
+Run this in the same activated virtual environment that crashes:
+
+```sh
+python check_vision_install.py
+```
+
+This uses separate subprocesses to test NumPy, OpenCV, PyTorch import and CPU convolution, torchvision NMS, Ultralytics import and NCNN import. A crashing child reports `SIGILL` while the diagnostic continues. It prints OS, architecture, Python and package versions without loading native libraries in the parent. It accesses no camera and downloads no models. An absent NCNN package is expected before NCNN export.
+
+Use the first failing probe and exact Python/package versions to choose a compatible package build. Do not downgrade Ultralytics to an old version that predates YOLO26 or reinstall every dependency before identifying the failure. A PyTorch version suggested for Python 3.11 may have no wheel for Python 3.13. The diagnostic output and the original crashing command are needed before selecting a repair.
+
+### Camera and inference issues
 
 - No `imx500` in the camera list: power down, reseat the ribbon, confirm the CSI socket and cable type, then verify firmware installation and reboot. Do not use the legacy camera stack or `cv2.VideoCapture(0)` for this CSI test.
 - Camera busy: close other `rpicam` or Picamera2 processes before starting another test.

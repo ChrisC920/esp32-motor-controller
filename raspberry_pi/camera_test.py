@@ -125,7 +125,7 @@ def run(args, Picamera2, cv2):
 
         def predict(frame):
             return model.predict(frame, imgsz=args.imgsz, conf=args.conf,
-                                 device="cpu", verbose=False)[0]
+                                 device="cpu", rect=False, verbose=False)[0]
 
         if model is not None:
             print(f"Warming up with {args.warmup} predictions...", flush=True)
