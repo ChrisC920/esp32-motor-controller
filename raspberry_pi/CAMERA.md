@@ -144,6 +144,25 @@ python test_torch_convolution.py
 
 This script prints the Torch version and backend setting, then runs convolution in a child process so it can report an `Illegal instruction` crash. It changes the backend setting only for that child process, accesses no camera and changes no installed packages. A passing test suggests a backend workaround worth testing with YOLO; it does not prove full YOLO inference works.
 
+If disabling MKLDNN still crashes with your Torch 2.14.1/Python 3.13 setup, try a separate environment:
+
+```sh
+python setup_pi4_vision.py
+```
+
+This preserves `.venv` and creates `.venv-pi4` using the same Python 3.13 and system camera bindings. It installs Torch 2.7.1 and torchvision 0.22.1, then tests Torch import, CPU convolution and torchvision NMS before installing Ultralytics 8.4.174. These matched versions have [Python 3.13 ARM64 wheels](https://pypi.org/project/torch/2.7.1/). This is a compatibility trial, not a verified fix for Torch 2.14.1 on your hardware. It stops on a failing test and preserves the partial environment. It does not install NCNN; the comparison's export step handles that separately.
+
+If the probes pass, activate the new environment and retain its package constraints during exports:
+
+```sh
+source .venv-pi4/bin/activate
+export PIP_CONSTRAINT="$VIRTUAL_ENV/vision-constraints.txt"
+python camera_test.py --mode yolo --model yolo26n.pt --preview --seconds 10
+python compare_yolo.py --frames 10 --repeats 1 --cooldown 0
+```
+
+The constraints prevent dependency installation from silently replacing the Torch build being tested. If an export requires incompatible versions, it should report a dependency conflict instead. To return to the original environment, run `deactivate`, `unset PIP_CONSTRAINT`, then `source .venv/bin/activate`.
+
 ### Camera and inference issues
 
 - No `imx500` in the camera list: power down, reseat the ribbon, confirm the CSI socket and cable type, then verify firmware installation and reboot. Do not use the legacy camera stack or `cv2.VideoCapture(0)` for this CSI test.
