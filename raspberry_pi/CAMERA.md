@@ -165,6 +165,17 @@ The constraints prevent dependency installation from silently replacing the Torc
 
 ### Camera and inference issues
 
+If Ultralytics reports `['ncnn'] not found` followed by `restart runtime or rerun command`, rerun the same command once in the same activated environment. That warning is emitted after an automatic package installation succeeds, but a later failure can have another cause. No Pi reboot is required just to start a new Python process. Check the full final error if it still fails.
+
+For a separate NCNN installation/import check:
+
+```sh
+source .venv-pi4/bin/activate
+python setup_ncnn.py
+```
+
+Use `.venv` instead if that is the environment used for your test. The script checks NCNN in a fresh process, installs a binary wheel with the same Python interpreter only when the module is missing, and checks again. It automatically keeps the Pi 4 environment's Torch constraints. It reports installation errors or SIGILL separately. It does not export models, access the camera or verify actual NCNN inference. If no compatible wheel is available, it stops and prints the pip error rather than silently compiling from source.
+
 - No `imx500` in the camera list: power down, reseat the ribbon, confirm the CSI socket and cable type, then verify firmware installation and reboot. Do not use the legacy camera stack or `cv2.VideoCapture(0)` for this CSI test.
 - Camera busy: close other `rpicam` or Picamera2 processes before starting another test.
 - Dark, uniform or blurry image: check the lens cover, illumination and manual focus. Capturing bytes alone is not proof of a useful image.
