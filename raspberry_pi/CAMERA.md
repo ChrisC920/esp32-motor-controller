@@ -136,6 +136,14 @@ This uses separate subprocesses to test NumPy, OpenCV, PyTorch import and CPU co
 
 Use the first failing probe and exact Python/package versions to choose a compatible package build. Do not downgrade Ultralytics to an old version that predates YOLO26 or reinstall every dependency before identifying the failure. A PyTorch version suggested for Python 3.11 may have no wheel for Python 3.13. The diagnostic output and the original crashing command are needed before selecting a repair.
 
+If PyTorch imports but its CPU convolution crashes, test convolution with MKLDNN disabled in the same activated environment:
+
+```sh
+python test_torch_convolution.py
+```
+
+This script prints the Torch version and backend setting, then runs convolution in a child process so it can report an `Illegal instruction` crash. It changes the backend setting only for that child process, accesses no camera and changes no installed packages. A passing test suggests a backend workaround worth testing with YOLO; it does not prove full YOLO inference works.
+
 ### Camera and inference issues
 
 - No `imx500` in the camera list: power down, reseat the ribbon, confirm the CSI socket and cable type, then verify firmware installation and reboot. Do not use the legacy camera stack or `cv2.VideoCapture(0)` for this CSI test.
